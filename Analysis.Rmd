@@ -1,0 +1,219 @@
+---
+title: "R Notebook"
+output:
+  word_document: default
+  html_notebook: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(WDI)
+library(expss)
+library(dplyr)
+library(PerformanceAnalytics)
+library(ggplot2)
+library(reshape2)
+library(lmtest)
+library(sandwich)
+library(car)
+library(hrbrthemes)
+library(ggiraph)
+library(ggiraphExtra)
+library(stargazer)
+library(gtsummary)
+```
+
+```{r}
+project <- WDI(country = "CN", indicator=c("NY.GDP.MKTP.KD.ZG","NE.GDI.TOTL.ZS","SP.POP.GROW","SP.DYN.CBRT.IN", 
+                                           "FM.LBL.BMNY.ZG","NE.CON.TOTL.CD","NE.CON.GOVT.ZS",                  
+                                           "NE.GDI.TOTL.KD.ZG","NE.CON.PRVT.KD.ZG","SL.UEM.TOTL.NE.ZS",
+                                           "NE.EXP.GNFS.ZS"),start=1978, end=2016)                                 
+#GDP GROWTH - NY.GDP.MKTP.KD.ZG
+#GROSS CAPITAL FORMATION (% OF GDP) - NE.GDI.TOTL.ZS
+#POPULATION GROWTH - SP.POP.GROW
+#BIRTH RATE - SP.DYN.CBRT.IN
+#BROAD MONEY GROWTH (ANNUAL %) - FM.LBL.BMNY.ZG
+#FINAL CONSUMPTION EXPENDITURE(annual % growth) -NE.CON.TOTL.CD
+#GENERAL GOVERNMENT FINAL CONSUMPTION EXP. - NE.CON.GOVT.ZS
+#Gross capital formation (annual % growth) - NE.GDI.TOTL.KD.ZG
+#Households and NPISHs Final consumption expenditure (annual % growth) - NE.CON.PRVT.KD.ZG
+#) - SL.UEM.TOTL.NE.ZS
+```
+
+```{r}
+names(project)[names(project)=="NY.GDP.MKTP.KD.ZG"]<- "gdp_growth"
+names(project)[names(project)=="NE.GDI.TOTL.ZS"]<- "gross_capital_formation"
+names(project)[names(project)=="SP.POP.GROW"]<- "pop_growth"
+names(project)[names(project)=="SP.DYN.CBRT.IN"]<- "birth_rate"
+names(project)[names(project)=="FM.LBL.BMNY.ZG"]<- "broad_money_growth"
+names(project)[names(project)=="NE.CON.TOTL.CD"]<- "log_final_consum_gdp"
+names(project)[names(project)=="NE.CON.GOVT.ZS"]<- "gov_final_consum_growth"
+names(project)[names(project)=="NE.GDI.TOTL.KD.ZG"]<- "gross_cap_form_growth"  
+names(project)[names(project)=="NE.CON.PRVT.KD.ZG"]<- "hh_consum_growth" 
+names(project)[names(project)=="SL.UEM.TOTL.NE.ZS"]<- "unemployment" 
+names(project)[names(project)=="NE.EXP.GNFS.ZS"]<- "Exports" 
+```
+
+```{r}
+nas <- sum(is.na(project))
+nas / (nrow(project) * 13)
+
+#Significant amount of NA values. Need to remove.
+proj_x <- select(project, -c(year, iso2c, country,gross_cap_form_growth,hh_consum_growth))
+proj_x <- na.omit(proj)
+proj_y <- select(project, -c(iso2c, country,gross_cap_form_growth,hh_consum_growth))
+proj <- select(project, -c(year, iso2c, country,gross_cap_form_growth,hh_consum_growth))
+proj <- na.omit(proj)
+proj_df <- as.data.frame(proj)
+proj_df$log_final_consum_gdp <- log(proj_df$log_final_consum_gdp)
+```
+
+```{r}
+p <- ggplot(project, aes(x=year, y=gdp_growth)) +
+  geom_line( color="steelblue") + 
+  geom_point() +
+  xlab("Year") +
+  theme_ipsum() +
+  theme(axis.text.x=element_text(angle=60, hjust=1))
+p
+```
+
+```{r}
+res <- cor(proj_df, method = "pearson", use = "complete.obs")
+round(res, 3)
+
+chart.Correlation(proj_df, histogram=TRUE, pch=19)
+```
+```{r}
+melted_res <- melt(res)
+head(melted_res)
+```
+```{r}
+ggplot(data = melted_res, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()
+```
+```{r}
+# Get lower triangle of the correlation matrix
+  get_lower_tri<-function(res){
+    res[upper.tri(res)] <- NA
+    return(res)
+  }
+  # Get upper triangle of the correlation matrix
+  get_upper_tri <- function(res){
+    res[lower.tri(res)]<- NA
+    return(res)
+  }
+```
+
+```{r}
+# Melt the correlation matrix
+upper_tri <- get_upper_tri(res)
+melted_res <- melt(upper_tri, na.rm = TRUE)
+
+# Heatmap
+ggplot(data = melted_res, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 12, hjust = 1))+
+ coord_fixed()
+```
+```{r}
+#Checking multicollinearity
+options(digits = 3, scipen = 999)
+
+fit1 <- lm(gdp_growth ~ gross_capital_formation + pop_growth + birth_rate + broad_money_growth + log_final_consum_gdp + gov_final_consum_growth + unemployment + Exports, data = proj_df)
+summary(fit1)
+```
+```{r}
+x_cor <- cor(proj_df[,c(2:9)])
+x_cor <- round(x_cor, 2)
+as.matrix(x_cor)
+```
+
+```{r}
+rob <- coeftest(fit1, vcov = vcovHC(fit1, "HC1")) %>% print()
+```
+```{r}
+fitted_model <- fit1$fitted.values
+bptest(fit1, ~fitted_model + I(fitted_model^2))
+```
+```{r}
+proj_df1 <-select(project, -c(year, iso2c, country,gross_cap_form_growth,hh_consum_growth, birth_rate, log_final_consum_gdp))
+
+fit2 <- lm(gdp_growth ~ gross_capital_formation + pop_growth + broad_money_growth + gov_final_consum_growth + unemployment + Exports, data = proj_df1)
+summary(fit2)
+```
+```{r}
+rob <- coeftest(fit2, vcov = vcovHC(fit2, "HC1")) %>% print()
+```
+```{r}
+fitted_model2 <- fit2$fitted.values
+bptest(fit2, ~fitted_model2 + I(fitted_model2^2))
+```
+
+```{r}
+fit3 <- lm(gdp_growth ~ gross_capital_formation + gov_final_consum_growth +  unemployment + Exports, data = proj_df)
+summary(fit3)
+```
+
+```{r}
+fit4 <- lm(gdp_growth ~ gross_capital_formation + Exports + unemployment + log_final_consum_gdp + broad_money_growth, data = proj_df)
+summary(fit4)
+```
+
+```{r}
+fitted_model4 <- fit4$fitted.values
+bptest(fit4, ~ fitted_model4 + I(fitted_model4^2))
+
+#Strongest fit based on multicollinearity and heteroskedasticity
+```
+
+```{r}
+ggplot(proj_df, aes(x=predict(fit2), y=gdp_growth)) + 
+  geom_point() +
+  geom_abline(intercept=0, slope=1) +
+  labs(x='Predicted Values', y='Actual Values', title='Predicted vs. Actual Values')
+```
+
+```{r}
+ggplot(proj_df, aes(x=predict(fit1), y=gdp_growth)) + 
+  geom_point() +
+  geom_abline(intercept=0, slope=1) +
+  labs(x='Predicted Values', y='Actual Values', title='Predicted vs. Actual Values')
+```
+```{r}
+ggplot(proj_df, aes(x=predict(fit3), y=gdp_growth)) + 
+  geom_point() +
+  geom_abline(intercept=0, slope=1) +
+  labs(x='Predicted Values', y='Actual Values', title='Predicted vs. Actual Values')
+```
+```{r}
+ggplot(proj_df, aes(x=predict(fit4), y=gdp_growth)) + 
+  geom_point() +
+  geom_abline(intercept=0, slope=1) +
+  labs(x='Predicted Values', y='Actual Values', title='Predicted vs. Actual Values')
+```
+```{r}
+proj_df %>% tbl_summary()
+```
+```{r}
+stargazer(type = "latex", title = "Model Residuals", out="table1.txt", fit1, fit3, fit4)
+?stargazer
+```
+
+```{r echo=FALSE, results = 'asis'}
+library(jtools)
+library(huxtable)
+library(flextable)
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
+tab_model(fit1, fit3, fit4, auto.label = TRUE, show.ci = FALSE)
+```
+
